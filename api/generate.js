@@ -18,18 +18,18 @@ export default async function handler(req, res) {
  * API Key 获取逻辑：
  * 优先从环境变量获取（兼容 Vite 等构建工具），若无则由环境在运行时注入。
  */
-const getApiKey = () => {
-  try {
-    // 尝试从 Vite 环境变量获取，或返回空字符串由平台注入
-    return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) || "";
-  } catch (e) {
-    return "";
-  }
-};
+// const getApiKey = () => {
+//   try {
+//     // 尝试从 Vite 环境变量获取，或返回空字符串由平台注入
+//     return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) || "";
+//   } catch (e) {
+//     return "";
+//   }
+// };
 
-const apiKey = getApiKey(); 
+// const apiKey = getApiKey(); 
 
-  // const apiKey = process.env.VITE_GEMINI_API_KEY;
+  const apiKey = process.env.VITE_GEMINI_API_KEY;
 
   if (!apiKey) {
     return res.status(500).json({ error: '服务器未配置 API KEY' });
