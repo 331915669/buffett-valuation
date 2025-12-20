@@ -56,17 +56,18 @@ const App = () => {
    * 安全的 AI 请求逻辑 - 已切换至阿里云 Qwen 接口
    */
   const fetchAiAnalysis = async (prompt) => {
-    const apiKey = ""; // 环境变量由平台在请求发出时自动从后端注入
+    // 必须保持为空字符串，平台会自动注入 Key
+    const apiKey = ""; 
     const systemPrompt = "你是一位精通巴菲特投资哲学的AI。请根据用户提供的估值参数，以巴菲特的口吻进行诊断。关注安全边际、护城河和现金流。语气要睿智且幽默，300字以内。";
     
     const callWithRetry = async (retryCount = 5, delay = 1000) => {
       try {
-        // 修改为阿里云百炼 Model API 格式 (使用 qwen-plus 或 qwen-max)
         const response = await fetch(`https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}` // 后端会自动替换空字符串为实际Key
+            // 确保没有多余空格，直接使用注入点
+            'Authorization': `Bearer ${apiKey}` 
           },
           body: JSON.stringify({
             model: "qwen-plus",
@@ -77,10 +78,13 @@ const App = () => {
           })
         });
 
+        if (response.status === 401) {
+          throw new Error("UNAUTHORIZED_ACCESS");
+        }
+
         if (!response.ok) throw new Error("API_GATEWAY_ERROR");
         
         const result = await response.json();
-        // Qwen 的返回格式遵循 OpenAI 兼容规范
         return result.choices?.[0]?.message?.content;
       } catch (err) {
         if (retryCount > 0) {
@@ -102,7 +106,7 @@ const App = () => {
       const result = await fetchAiAnalysis(prompt);
       setDeepReport(result);
     } catch (err) {
-      setError("通往奥马哈的通讯暂时中断。");
+      setError("通往奥马哈的通讯暂时中断 (401 或 网络限制)。");
     } finally {
       setIsAnalyzing(false);
     }
