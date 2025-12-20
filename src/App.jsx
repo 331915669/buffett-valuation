@@ -2,20 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Settings, ShieldCheck, MessageSquare, Edit3, BarChart3, AlertCircle, Sparkles, BookOpen, TrendingUp, Zap } from 'lucide-react';
 
-// --- 核心配置 ---
 /**
- * 修复编译错误：
- * 在某些 es2015 环境中 import.meta 可能不可用。
- * 我们改用更通用的方式尝试获取环境变量，并优先兼容 Vercel 的注入逻辑。
+ * 核心安全性说明：
+ * 在 Vercel 生产环境下，为了彻底防止 API Key 泄露，
+ * 我们不再在前端保存 apiKey。
+ * 请求将被发送到同域下的 API 路由（Serverless Function），
+ * 由服务器端从环境变量中读取密钥并转发请求。
  */
-let apiKey = "";
-try {
-  // 尝试从 Vite/Vercel 标准环境变量中获取
-  apiKey = (import.meta && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) || "";
-} catch (e) {
-  // 如果 import.meta 彻底报错，则保持为空，由平台环境自动注入
-  apiKey = "";
-}
 
 const App = () => {
   const [params, setParams] = useState({
@@ -67,15 +60,22 @@ const App = () => {
     };
   }, [params]);
 
-  // --- Gemini 2.5 API 调用 ---
+  // --- API 代理调用 ---
   const fetchBuffettOpinion = async (userQuery) => {
     const systemPrompt = "你是一位精通巴菲特投资哲学的AI。请根据用户提供的估值参数，以巴菲特的口吻进行诊断。关注安全边际、护城河和现金流。语气要睿智且幽默，300字以内。";
     
     const callWithRetry = async (retryCount = 5, delay = 1000) => {
       try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        /**
+         * 终极安全方案：
+         * 我们向本地 /api/generate 接口发起请求。
+         * 这样浏览器 Network 面板只会看到对你自己域名的请求，看不到 Google 的 API Key。
+         */
+        const response = await fetch(`/api/generate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json'
+          },
           body: JSON.stringify({
             contents: [{ parts: [{ text: userQuery }] }],
             systemInstruction: { parts: [{ text: systemPrompt }] }
@@ -109,7 +109,7 @@ const App = () => {
       const result = await fetchBuffettOpinion(prompt);
       setDeepReport(result);
     } catch (err) {
-      setError("通往奥马哈的通讯暂时中断，请稍后再试。");
+      setError("通往奥马哈的通讯暂时中断，请检查 API 路由配置。");
     } finally {
       setIsAnalyzing(false);
     }
@@ -135,8 +135,7 @@ const App = () => {
       </div>
 
       <main className="max-w-7xl mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
-        {/* 左侧：参数与原理 */}
+        {/* 参数设置部分 */}
         <div className="lg:col-span-4 space-y-6">
           <section className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
             <div className="flex items-center mb-6 text-slate-800">
@@ -193,9 +192,8 @@ const App = () => {
           </section>
         </div>
 
-        {/* 右侧：展示与分析 */}
+        {/* 估值展示部分 */}
         <div className="lg:col-span-8 space-y-6">
-          
           <section className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200 text-center relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-700 to-indigo-500"></div>
             <p className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-4">当前内在价值 (Intrinsic Value)</p>
