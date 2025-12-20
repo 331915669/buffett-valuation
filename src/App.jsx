@@ -62,7 +62,7 @@ const App = () => {
     
     const callWithRetry = async (retryCount = 5, delay = 1000) => {
       try {
-        const response = await fetch(`https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`, {
+        const response = await fetch(`https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -70,7 +70,7 @@ const App = () => {
             'Authorization': `Bearer ${apiKey}` 
           },
           body: JSON.stringify({
-            model: "qwen-plus",
+            model: "qwen-max",
             messages: [
               { role: "system", content: systemPrompt },
               { role: "user", content: prompt }
