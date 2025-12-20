@@ -2,6 +2,21 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Settings, ShieldCheck, MessageSquare, Edit3, BarChart3, AlertCircle, Sparkles, BookOpen, TrendingUp, Zap } from 'lucide-react';
 
+// --- 核心配置 ---
+/**
+ * 修复编译错误：
+ * 在某些 es2015 环境中 import.meta 可能不可用。
+ * 我们改用更通用的方式尝试获取环境变量，并优先兼容 Vercel 的注入逻辑。
+ */
+let apiKey = "";
+try {
+  // 尝试从 Vite/Vercel 标准环境变量中获取
+  apiKey = (import.meta && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) || "";
+} catch (e) {
+  // 如果 import.meta 彻底报错，则保持为空，由平台环境自动注入
+  apiKey = "";
+}
+
 const App = () => {
   const [params, setParams] = useState({
     fcf: 10,
@@ -14,7 +29,7 @@ const App = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState("");
 
-  // --- DCF 估值算法 ---
+  // --- DCF 估值逻辑 ---
   const valuation = useMemo(() => {
     const { fcf, growth, discount, perpetual } = params;
     const g = growth / 100;
@@ -52,40 +67,28 @@ const App = () => {
     };
   }, [params]);
 
-  /**
-   * 安全的 AI 请求逻辑 - 已切换至阿里云 Qwen 接口
-   */
-  const fetchAiAnalysis = async (prompt) => {
-    // 必须保持为空字符串，平台会自动注入 Key
-    const apiKey = ""; 
+  // --- Gemini 2.5 API 调用 ---
+  const fetchBuffettOpinion = async (userQuery) => {
     const systemPrompt = "你是一位精通巴菲特投资哲学的AI。请根据用户提供的估值参数，以巴菲特的口吻进行诊断。关注安全边际、护城河和现金流。语气要睿智且幽默，300字以内。";
     
     const callWithRetry = async (retryCount = 5, delay = 1000) => {
       try {
-        const response = await fetch(`https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation`, {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
           method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            // 确保没有多余空格，直接使用注入点
-            'Authorization': `Bearer ${apiKey}` 
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: "qwen-max",
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: prompt }
-            ]
+            contents: [{ parts: [{ text: userQuery }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] }
           })
         });
 
-        if (response.status === 401) {
-          throw new Error("UNAUTHORIZED_ACCESS");
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error?.message || "API_ERROR");
         }
-
-        if (!response.ok) throw new Error("API_GATEWAY_ERROR");
         
         const result = await response.json();
-        return result.choices?.[0]?.message?.content;
+        return result.candidates?.[0]?.content?.parts?.[0]?.text;
       } catch (err) {
         if (retryCount > 0) {
           await new Promise(res => setTimeout(res, delay));
@@ -103,10 +106,10 @@ const App = () => {
     setError("");
     const prompt = `估值参数：FCF ${params.fcf}亿，增长率 ${params.growth}%，折现率 ${params.discount}%，永续增长 ${params.perpetual}%。内在价值估值为 ${valuation?.total}亿。请点评。`;
     try {
-      const result = await fetchAiAnalysis(prompt);
+      const result = await fetchBuffettOpinion(prompt);
       setDeepReport(result);
     } catch (err) {
-      setError("通往奥马哈的通讯暂时中断 (401 或 网络限制)。");
+      setError("通往奥马哈的通讯暂时中断，请稍后再试。");
     } finally {
       setIsAnalyzing(false);
     }
@@ -118,100 +121,163 @@ const App = () => {
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <Sparkles className="text-amber-400" />
-            <span className="text-lg font-bold">巴菲特 AI 估值助手 2.0 (Qwen版)</span>
+            <span className="text-lg font-bold tracking-tight">巴菲特 AI 估值助手 2.0</span>
           </div>
           <div className="text-xs italic opacity-70 hidden md:block">“Price is what you pay. Value is what you get.”</div>
         </div>
       </nav>
 
-      <div className="bg-green-50 border-b border-green-100 py-2">
-        <div className="max-w-7xl mx-auto px-4 flex items-center text-green-800 text-xs font-medium">
-          <ShieldCheck size={14} className="mr-2 flex-shrink-0" />
-          <span>核心安全优化：API Key 已切换至阿里云并由服务端网关托管。</span>
+      <div className="bg-amber-50 border-b border-amber-100 py-2">
+        <div className="max-w-7xl mx-auto px-4 flex items-center text-amber-800 text-xs font-medium">
+          <AlertCircle size={14} className="mr-2 flex-shrink-0" />
+          <span>本模型参考沃伦·巴菲特的自由现金流折现 (DCF) 估值方法。</span>
         </div>
       </div>
 
       <main className="max-w-7xl mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* 左侧配置栏 */}
+        
+        {/* 左侧：参数与原理 */}
         <div className="lg:col-span-4 space-y-6">
           <section className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
-            <div className="flex items-center mb-6">
+            <div className="flex items-center mb-6 text-slate-800">
               <Settings className="w-5 h-5 mr-2 text-blue-700" />
-              <h2 className="font-bold">估值模型设置</h2>
+              <h2 className="font-bold">模型参数设置</h2>
             </div>
             <div className="space-y-8">
               <FcfInput value={params.fcf} onChange={(val) => setParams(p => ({...p, fcf: val}))} />
-              <ParamSlider label="高速增长率 (1-10年)" value={params.growth} unit="%" min={0} max={50} onChange={(v) => setParams(p => ({...p, growth: v}))} />
-              <ParamSlider label="期望折现率" value={params.discount} unit="%" min={5} max={20} onChange={(v) => setParams(p => ({...p, discount: v}))} />
-              <ParamSlider label="永续增长率" value={params.perpetual} unit="%" min={0} max={5} step={0.1} onChange={(v) => setParams(p => ({...p, perpetual: v}))} />
+              <ParamSlider label="高速增长率 (1-10年)(g)" value={params.growth} unit="%" min={0} max={50} onChange={(v) => setParams(p => ({...p, growth: v}))} />
+              <ParamSlider label="期望折现率(r)" value={params.discount} unit="%" min={5} max={20} onChange={(v) => setParams(p => ({...p, discount: v}))} />
+              <ParamSlider label="永续增长率 (g永续)" value={params.perpetual} unit="%" min={0} max={5} step={0.1} onChange={(v) => setParams(p => ({...p, perpetual: v}))} />
+            </div>
+          </section>
+
+          <section className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+            <div className="flex items-center mb-4 text-slate-800">
+              <BookOpen className="w-5 h-5 mr-2 text-blue-700" />
+              <h2 className="font-bold">估值原理说明</h2>
+            </div>
+            <div className="space-y-6 text-sm text-slate-600 leading-relaxed">
+              <div>
+                <p className="font-bold text-blue-800 mb-2">① 前10年折现 (PV1)</p>
+                <div className="bg-slate-50 p-4 rounded-xl text-center text-blue-900 font-serif flex items-center justify-center space-x-2">
+                  <span className="shrink-0">PV1 = </span>
+                  <div className="flex flex-col items-center justify-center leading-none text-[10px] select-none mx-1 -space-y-0.5">
+                    <span>10</span>
+                    <span className="text-xl leading-none">Σ</span>
+                    <span>t=1</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <span className="px-2 border-b border-blue-900/40 leading-tight text-sm">FCF × (1 + g)<sup>t</sup></span>
+                    <span className="px-2 leading-tight text-sm">(1 + r)<sup>t</sup></span>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p className="font-bold text-blue-800 mb-2">② 永续价值折现 (PV2)</p>
+                <div className="bg-slate-50 p-4 rounded-xl text-blue-900 font-serif space-y-3">
+                  <div className="flex items-center justify-center space-x-1 border-b border-blue-100/50 pb-2 text-xs">
+                    <span className="text-slate-400 mr-1 italic">Step A:</span>
+                    <span>FCF<sub>11</sub> = FCF<sub>10</sub> × (1 + g<sub>永续</sub>)</span>
+                  </div>
+                  <div className="flex items-center justify-center space-x-1 pt-1">
+                    <span className="text-slate-400 mr-2 italic text-xs shrink-0">Step B:</span>
+                    <span className="shrink-0">PV2 = </span>
+                    <div className="flex flex-col items-center">
+                      <span className="px-2 border-b border-blue-900/40 leading-tight">FCF<sub>11</sub> / (r - g<sub>永续</sub>)</span>
+                      <span className="px-2 leading-tight">(1 + r)<sup>10</sup></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
         </div>
 
-        {/* 右侧展示区 */}
+        {/* 右侧：展示与分析 */}
         <div className="lg:col-span-8 space-y-6">
+          
           <section className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200 text-center relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-700 to-indigo-500"></div>
-            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-4">内在价值 (Intrinsic Value)</p>
+            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-4">当前内在价值 (Intrinsic Value)</p>
             {valuation ? (
-              <div className="text-5xl md:text-7xl font-bold text-[#1e3a8a] font-mono">
+              <div className="text-5xl md:text-7xl font-bold text-[#1e3a8a] font-mono tracking-tighter">
                 ¥ {Number(valuation.total).toLocaleString()} 亿
               </div>
             ) : (
-              <div className="text-red-400 py-4">参数冲突，请调低永续增长率</div>
+              <div className="text-slate-300 italic text-2xl py-4">参数无效</div>
             )}
           </section>
 
-          <section className="bg-[#1e3a8a] text-white rounded-3xl p-8 shadow-xl">
+          <section className="bg-[#1e3a8a] text-white rounded-3xl p-8 shadow-xl relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-10 text-white pointer-events-none">
+              <ShieldCheck size={100} />
+            </div>
             <div className="flex items-center space-x-2 mb-6 text-blue-200">
               <Zap size={18} />
-              <h3 className="text-xs font-bold uppercase">投资建议</h3>
+              <h3 className="text-xs font-bold uppercase tracking-widest">买入建议</h3>
             </div>
-            {valuation && (
+            
+            {valuation ? (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div>
-                  <p className="text-blue-300 text-[10px] mb-2 uppercase">安全买入价 (7折)</p>
-                  <div className="text-3xl font-bold text-amber-400 font-mono">¥ {Number(valuation.safetyPrice).toLocaleString()} 亿</div>
+                <div className="md:col-span-1 border-r border-blue-800/30 pr-4">
+                  <p className="text-blue-300 text-[10px] mb-2 uppercase tracking-wider">建议买入参考价 (7折安全边际)</p>
+                  <div className="text-3xl font-bold font-mono text-amber-400">¥ {Number(valuation.safetyPrice).toLocaleString()} 亿</div>
                 </div>
-                <div>
-                  <p className="text-blue-300 text-[10px] mb-1 uppercase">P/FCF 倍数</p>
-                  <p className="font-bold text-3xl font-mono">{valuation.multiple}x</p>
+                <div className="flex flex-col justify-center">
+                  <p className="text-blue-300 text-[10px] mb-1 uppercase tracking-wider text-center md:text-left">估值倍数 (P/FCF)</p>
+                  <p className="font-bold font-mono text-3xl text-center md:text-left">{valuation.multiple}x</p>
                 </div>
-                <div>
-                  <p className="text-blue-300 text-[10px] mb-1 uppercase">终值贡献比</p>
-                  <p className="font-bold text-3xl font-mono">{valuation.tvRatio}%</p>
+                <div className="flex flex-col justify-center">
+                  <p className="text-blue-300 text-[10px] mb-1 uppercase tracking-wider text-center md:text-left">远期价值占比</p>
+                  <p className="font-bold font-mono text-3xl text-center md:text-left">{valuation.tvRatio}%</p>
                 </div>
+              </div>
+            ) : (
+              <div className="text-red-300 text-center py-4 border border-red-900/30 rounded-xl bg-red-950/20">
+                ⚠️ 永续增长率必须小于折现率
               </div>
             )}
           </section>
 
-          <section className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center space-x-4">
-              <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center border border-amber-200 overflow-hidden shrink-0">
-                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=buffett`} alt="Avatar" />
+          {valuation && (
+            <section className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center border border-amber-200 overflow-hidden flex-shrink-0">
+                  <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=buffett&backgroundColor=ffdfbf`} alt="Buffett" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-800">巴菲特 AI 深度报告</h4>
+                  <p className="text-xs text-slate-400">Deep Diagnosis</p>
+                </div>
               </div>
-              <div>
-                <h4 className="font-bold text-slate-800">巴菲特 AI 深度诊断</h4>
-                <p className="text-xs text-slate-400">Powered by 阿里云通义千问</p>
-              </div>
-            </div>
-            <button 
-              onClick={handleAiDeepDive} 
-              disabled={isAnalyzing}
-              className={`px-8 py-4 rounded-2xl font-bold text-white transition-all ${isAnalyzing ? 'bg-slate-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'}`}
-            >
-              {isAnalyzing ? "正在进行安全分析..." : "获取 AI 诊断报告"}
-            </button>
-          </section>
+              <button 
+                onClick={handleAiDeepDive} 
+                disabled={isAnalyzing}
+                className={`px-8 py-4 rounded-2xl font-bold text-white transition-all shadow-md flex items-center space-x-2 ${isAnalyzing ? 'bg-slate-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600 active:scale-95'}`}
+              >
+                {isAnalyzing ? (
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <><MessageSquare size={18} /><span>获取巴菲特 AI 点评</span></>
+                )}
+              </button>
+            </section>
+          )}
 
           {(isAnalyzing || deepReport || error) && (
-            <section className="bg-white rounded-3xl p-8 border border-slate-200 shadow-lg">
-              {error && <div className="p-4 bg-red-50 text-red-700 rounded-xl mb-4">{error}</div>}
+            <section className="bg-white rounded-3xl p-8 border border-slate-200 shadow-lg animate-in fade-in slide-in-from-top-4">
+              {error && <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-100 text-sm mb-4">{error}</div>}
+              {isAnalyzing && !deepReport && (
+                <div className="py-8 flex flex-col items-center justify-center text-slate-400">
+                  <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+                  <p className="text-sm font-medium animate-pulse">正在进行深度财务推演...</p>
+                </div>
+              )}
               {deepReport && (
-                <div className="text-slate-700 leading-relaxed font-serif text-lg bg-slate-50 p-8 rounded-2xl">
-                  <div className="mb-4 text-amber-600 font-bold text-xs uppercase flex items-center italic">
+                <div className="text-slate-700 leading-relaxed font-serif text-lg bg-slate-50 p-8 rounded-2xl border border-slate-100 shadow-inner">
+                  <div className="mb-4 text-amber-600 font-bold text-sm tracking-widest uppercase flex items-center">
                     <Sparkles size={14} className="mr-2" />
-                    Qwen 智能诊断结论
+                    AI Diagnosis Result
                   </div>
                   <div className="whitespace-pre-wrap">{deepReport}</div>
                 </div>
@@ -220,14 +286,30 @@ const App = () => {
           )}
 
           <section className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
-             <div className="h-64 w-full">
+            <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center text-slate-800 font-bold">
+                <BarChart3 className="w-5 h-5 mr-2 text-blue-500" />
+                <span>现金流预测轨迹 (未来10年)</span>
+              </div>
+              <div className="text-[10px] text-slate-400 font-mono tracking-widest uppercase">Values in Billions (¥)</div>
+            </div>
+            <div className="h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={valuation?.chartData || []}>
+                  <defs>
+                    <linearGradient id="colorFcf" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#1e3a8a" stopOpacity={0.1}/>
+                      <stop offset="95%" stopColor="#1e3a8a" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="year" axisLine={false} tickLine={false} tick={{fontSize: 10}} />
-                  <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10}} />
-                  <Tooltip />
-                  <Area type="monotone" dataKey="fcf" stroke="#1e3a8a" strokeWidth={3} fill="#1e3a8a22" />
+                  <XAxis dataKey="year" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} />
+                  <Tooltip 
+                    contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)'}}
+                    formatter={(v) => [`¥${v} 亿`, '预计现金流']}
+                  />
+                  <Area type="monotone" dataKey="fcf" stroke="#1e3a8a" strokeWidth={4} fill="url(#colorFcf)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -241,30 +323,52 @@ const App = () => {
 const FcfInput = ({ value, onChange }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [tempValue, setTempValue] = useState(value.toString());
+  const handleBlur = () => {
+    setIsEditing(false);
+    const parsed = parseFloat(tempValue);
+    if (!isNaN(parsed) && parsed >= 0) onChange(parsed);
+  };
+  const getSliderValue = () => {
+    if (value >= 500) return 100;
+    if (value <= 10) return (value * 4); 
+    return 40 + ((value - 10) / 490) * 60;
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <span className="text-xs font-bold text-slate-500">基期现金流 (FCF)</span>
-        <div onClick={() => setIsEditing(true)} className="cursor-pointer text-blue-700 font-bold underline">
+      <div className="flex justify-between items-end">
+        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">基期自由现金流 (FCF)</span>
+        <div onClick={() => setIsEditing(true)} className="cursor-pointer group flex items-center space-x-2 text-blue-700 font-mono font-bold">
           {isEditing ? (
-            <input autoFocus value={tempValue} onBlur={() => { setIsEditing(false); onChange(parseFloat(tempValue)); }} onChange={(e) => setTempValue(e.target.value)} className="w-20 text-right bg-slate-50 rounded" />
+            <div className="flex items-center bg-slate-100 px-3 py-1.5 rounded-xl border border-blue-200 ring-2 ring-blue-100">
+              <input autoFocus type="number" value={tempValue} onChange={(e) => setTempValue(e.target.value)} onBlur={handleBlur} onKeyDown={(e) => e.key === 'Enter' && handleBlur()} className="bg-transparent outline-none w-24 text-right" />
+              <span className="text-[10px] ml-1 text-slate-400">亿</span>
+            </div>
           ) : (
-            `${value} 亿`
+            <div className="flex items-center space-x-2 bg-blue-50/50 px-3 py-1.5 rounded-xl border border-transparent hover:border-blue-200 transition-all">
+              <span className="text-xl underline decoration-dotted decoration-blue-300 underline-offset-4">{value} 亿</span>
+              <Edit3 size={14} className="opacity-40 group-hover:opacity-100 text-blue-600 transition-opacity" />
+            </div>
           )}
         </div>
       </div>
-      <input type="range" min="0" max="500" value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full accent-blue-700" />
+      <input type="range" min="0" max="100" step="0.1" value={getSliderValue()} onChange={(e) => {
+        const raw = parseFloat(e.target.value);
+        let val = raw <= 40 ? (raw / 4).toFixed(1) : (10 + ((raw - 40) / 60) * 490).toFixed(0);
+        onChange(parseFloat(val));
+        setTempValue(val.toString());
+      }} className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-700" />
     </div>
   );
 };
 
 const ParamSlider = ({ label, value, unit, min, max, step = 1, onChange }) => (
-  <div>
-    <div className="flex justify-between text-xs font-bold text-slate-500 mb-2">
-      <span>{label}</span>
-      <span className="text-blue-700 font-mono">{value}{unit}</span>
+  <div className="group">
+    <div className="flex justify-between text-xs font-bold text-slate-500 mb-3 group-hover:text-blue-700 transition">
+      <span className="tracking-wider">{label}</span>
+      <span className="font-mono bg-blue-50 px-2 py-0.5 rounded text-blue-700">{value}{unit}</span>
     </div>
-    <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full accent-blue-700" />
+    <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-700" />
   </div>
 );
 
