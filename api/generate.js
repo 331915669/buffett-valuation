@@ -4,6 +4,8 @@
  * 作用: 在服务端隐藏并使用 API Key，防止前端泄露
  */
 
+/* global process */
+
 export default async function handler(req, res) {
   // 1. 只允许 POST 请求
   if (req.method !== 'POST') {
